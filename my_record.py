@@ -4,6 +4,7 @@
 # Only one user showed as the most active member as it is not required to show all users with similar ratings as the most active user
 
 import sys
+import os
 from datetime import datetime
 
 class Book:
@@ -137,21 +138,34 @@ class Member:
         return len(self.__fiction_borrow_or_reserve)
     
     def calculate_average_borrowing_dates(self):
-        textbook_days = [int(entry) for entry in self.__textbook_borrow_or_reserve if entry.isdigit()]
-        fiction_days = [int(entry) for entry in self.__fiction_borrow_or_reserve if entry.isdigit()]
+        textbook_days = [int(entry['day']) for entry in self.__textbook_borrow_or_reserve if entry['day'].isdigit()]
+        fiction_days = [int(entry['day']) for entry in self.__fiction_borrow_or_reserve if entry['day'].isdigit()]
         if (len(textbook_days) + len(fiction_days) == 0):
             return 0
         average = (sum(textbook_days) + sum(fiction_days)) / (len(textbook_days) + len(fiction_days))
         return average
     
+    def calculate_fee(self):
+        fee = 0
+        for textbook in self.__textbook_borrow_or_reserve:
+            if textbook['day'].isdigit() and int(textbook['n_free_days']) < int(textbook['day']):
+                fee += (int(textbook['day']) - int(textbook['n_free_days'])) * int(textbook['late_charge'])
+        
+        for fiction in self.__fiction_borrow_or_reserve:
+            if fiction['day'].isdigit() and int(fiction['n_free_days']) < int(fiction['day']):
+                fee += (int(fiction['day']) - int(fiction['n_free_days'])) * int(fiction['late_charge'])
+        return fee
+    
     def calculate_statistics(self):
         n_textbook = self.calculate_n_textbook_borrow_or_reserve()
         n_fiction = self.calculate_n_fiction_borrow_or_reserve()
         average = self.calculate_average_borrowing_dates()
+        fee = self.calculate_fee()
         return {
             'n_textbook': n_textbook,
             'n_fiction': n_fiction,
-            'average': average
+            'average': average,
+            'fee': fee
         }
 
     def display_info(self):
@@ -164,10 +178,10 @@ class StandardMember(Member):
         super().__init__(member_id, first_name, last_name, dob)
     
     def check_is_within_textbook_limit(self):
-        return StandardMember.__n_textbook_borrow_or_reserve > super().calculate_n_textbook_borrow_or_reserve()
+        return StandardMember.__n_textbook_borrow_or_reserve < super().calculate_n_textbook_borrow_or_reserve()
     
     def check_is_within_fiction_limit(self):
-        return StandardMember.__n_fiction_borrow_or_reserve > super().calculate_n_fiction_borrow_or_reserve()
+        return StandardMember.__n_fiction_borrow_or_reserve < super().calculate_n_fiction_borrow_or_reserve()
 
 class PremiumMember(Member):
     __n_textbook_borrow_or_reserve = 2
@@ -176,12 +190,13 @@ class PremiumMember(Member):
         super().__init__(member_id, first_name, last_name, dob)
     
     def check_is_within_textbook_limit(self):
-        return PremiumMember.__n_textbook_borrow_or_reserve > super().calculate_n_textbook_borrow_or_reserve()
+        return PremiumMember.__n_textbook_borrow_or_reserve < super().calculate_n_textbook_borrow_or_reserve()
     
     def check_is_within_fiction_limit(self):
-        return PremiumMember.__n_fiction_borrow_or_reserve > super().calculate_n_fiction_borrow_or_reserve()
+        return PremiumMember.__n_fiction_borrow_or_reserve < super().calculate_n_fiction_borrow_or_reserve()
 
 class Records:
+    report = 'Generated time:' + datetime.now().strftime("%d/%m/%Y %H:%M:%S") + '\n\n\n'
     def __init__(self):
         self.__books = {}
         self.__members = {}
@@ -197,6 +212,8 @@ class Records:
                 n_copies = int(parts[3].strip())
                 n_free_days = int(parts[4].strip())
                 late_charge = float(parts[5].strip())
+                
+                Validation.validate_book_id(book_id)
                 
                 if book_type == "T":
                     self.__books[book_id] = TextBook(book_id, name, n_copies, late_charge, n_free_days)
@@ -224,19 +241,25 @@ class Records:
             for line in file:
                 parts = line.strip().split(',')
                 book_id = parts[0].strip()
+
+                Validation.validate_book_id(book_id)
+                
                 if book_id not in self.__books:
                     raise InvalidBookIdException(f'No book with book id {book_id}')
                 for part in parts[1:]:
-                    member_id, days = part.split(':')
+                    member_id, entry = part.split(':')
                     member_id = member_id.strip()
-                    days = days.strip()
+                    entry = entry.strip()
+
+                    Validation.validate_record_entry(entry)
+
                     if member_id not in self.__members:
                         raise InvalidMemberIdException(f'No member with member id {member_id}')
-                    self.__books[book_id].add_borrow_record(member_id, days)
+                    self.__books[book_id].add_borrow_record(member_id, entry)
                     if (type(self.__books[book_id]).__name__ == 'TextBook'):
-                        self.__members[member_id].add_textbook_entry(days)
+                        self.__members[member_id].add_textbook_entry({'n_free_days': self.__books[book_id].n_free_days, 'late_charge': self.__books[book_id].late_charge, 'day': entry})
                     elif (type(self.__books[book_id]).__name__ == 'FictionBook'):
-                        self.__members[member_id].add_fiction_entry(days)
+                        self.__members[member_id].add_fiction_entry({'n_free_days': self.__books[book_id].n_free_days, 'late_charge': self.__books[book_id].late_charge, 'day': entry})
                     else:
                         raise InvalidBookTypeException("Invalid book type")
 
@@ -310,10 +333,10 @@ class Records:
         if longest_days_book:
             book_information += f"The book {longest_days_book.name} has the longest borrow days ({longest_days} days).\n"
         print(book_information)
-        self.write_book_information('reports.txt', book_information)
+        self.report += book_information
 
     # # Write order details to the file
-    def write_book_information(self, orders_filename, book_information):
+    def write_report(self, orders_filename, book_information):
         f = open(orders_filename, "w")
         f.write(book_information)
         f.close()
@@ -321,10 +344,10 @@ class Records:
     def display_member_info(self):
         member_information = ''
         member_information += "MEMBER INFORMATION\n"
-        member_information += ('-' * 105 + '\n')
+        member_information += ('-' * 113 + '\n')
         member_information += '| '
-        member_information += f"{'Member ID':<11} {'FName':<15} {'Lname':<15} {'Type':>8} {'DOB':>15} {'NTextbook':>11} {'NFiction':>10} {'Average':>10}|\n"
-        member_information += ('-' * 105 + '\n')
+        member_information += f"{'Member ID':<11} {'FName':<15} {'Lname':<15} {'Type':>8} {'DOB':>15} {'NTextbook':>11} {'NFiction':>10} {'Average':>10} {'Fee':>8}|\n"
+        member_information += ('-' * 113 + '\n')
 
         most_active_member = None
         max_borrow_reserve_count = 0
@@ -334,7 +357,7 @@ class Records:
         for member_id, member in sorted(self.__members.items()):
             stats = member.calculate_statistics()
             member_type = 'Standard'  if type(member).__name__ == 'StandardMember' else 'Premium'
-            member_information += f"| {member.member_id:<11} {member.first_name:<15} {member.last_name:<15} {member_type:>8} {member.dob.strftime('%d-%b-%Y'):>15} {stats['n_textbook']:>11} {stats['n_fiction']:>10} {stats['average']:>10.2f}|\n"
+            member_information += f"| {member.member_id:<11} {member.first_name:<15} {member.last_name:<15} {member_type:>8} {member.dob.strftime('%d-%b-%Y'):>15} {stats['n_textbook']:>10}{'!' if member.check_is_within_textbook_limit() else ' '} {stats['n_fiction']:>10}{'!' if member.check_is_within_fiction_limit() else ' '} {stats['average']:>10.2f} {stats['fee']:>8.2f}|\n"
             
             borrow_reserve_count = stats['n_textbook'] + stats['n_fiction']
             if borrow_reserve_count > max_borrow_reserve_count:
@@ -344,7 +367,7 @@ class Records:
             if stats['average'] < least_average:
                 lease_average_member = member
                 least_average = stats['average']
-        member_information += ('-' * 105)
+        member_information += ('-' * 113)
         member_information += ('\nMEMBER SUMMARY')
 
         if most_active_member:
@@ -352,6 +375,8 @@ class Records:
         if lease_average_member:
             member_information += f"The member with least verage number of borrowing days is {lease_average_member.first_name + ' ' + lease_average_member.last_name} with ({least_average} days).\n"
         print(member_information)
+        self.report += '\n\n' + member_information
+        self.write_report('reports.txt', self.report)
 
 class InvalidFreeDaysForFictionException(Exception):
     pass
@@ -368,10 +393,49 @@ class InvalidMemberIdException(Exception):
 class InvalidMemberTypeException(Exception):
     pass
 
+class InvalidFileNameException(Exception):
+    pass
+
+class FileNamesNotFoundException(Exception):
+    pass
+
+class InvalidRecordException(Exception):
+    pass
+
+class Validation:
+
+    @staticmethod
+    def check_files_exist(file_names):
+        missing_files = [file_name for file_name in file_names if not os.path.isfile(file_name)]
+
+        if missing_files:
+            missing_file_names = ''
+            for file_name in missing_files:
+                missing_file_names += file_name + ','
+            raise InvalidFileNameException(f"The following files cannot be found: {missing_file_names}")
+    
+    @staticmethod
+    def validate_record_entry(entry):
+        if (entry.isdigit()):
+            # 0 borrowing days also considerd as not possible
+            if(int(entry) < 1):
+                raise InvalidRecordException(f'Invalid value {entry} found for record')
+        elif entry != 'R':
+            raise InvalidRecordException(f'Invalid value {entry} found for record')
+        
+    @staticmethod
+    def validate_book_id(book_id):
+        if(book_id[0] != 'B') | (not book_id[1:].isdigit()):
+            raise InvalidBookIdException(f"Invalid book id {book_id}")
+        
+    @staticmethod
+    def validate_member_id(member_id):
+        if(member_id[0] != 'B') | (not member_id[1:].isdigit()):
+            raise InvalidMemberIdException(f"Invalid member id {member_id}")
+
 def main():
     # if len(sys.argv) != 3:
-    #     print("Usage: python my_record.py <record_file_name> <book_file_name>")
-    #     return
+    #     raise FileNamesNotFoundException("Invalid command-line arguments \nUsage: python my_record.py <record_file_name> <book_file_name>")
 
     record_file_name = 'records.txt'
     # record_file_name = sys.argv[1]
@@ -379,6 +443,8 @@ def main():
     # book_file_name = sys.argv[2]
     member_file_name = 'members.txt'
     # member_file_name = sys.argv[2]
+
+    Validation.check_files_exist([record_file_name, book_file_name, member_file_name])
     records = Records()
     records.read_records(record_file_name, book_file_name, member_file_name)
     records.display_records()
@@ -386,4 +452,32 @@ def main():
     records.display_member_info()
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except InvalidFreeDaysForFictionException as e:
+        print(e)
+        sys.exit()
+    except InvalidBookIdException as e:
+        print(e)
+        sys.exit()
+    except InvalidBookTypeException as e:
+        print(e)
+        sys.exit()
+    except InvalidMemberIdException as e:
+        print(e)
+        sys.exit()
+    except InvalidMemberTypeException as e:
+        print(e)
+        sys.exit()
+    except InvalidFileNameException as e:
+        print(e)
+        sys.exit()
+    except FileNamesNotFoundException as e:
+        print(e)
+        sys.exit()
+    except InvalidRecordException as e:
+        print(e)
+        sys.exit()
+    # except Exception as e:
+    #     print(e)
+        sys.exit()
