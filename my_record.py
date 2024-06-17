@@ -1,7 +1,10 @@
 # A member can borrow a book multiple times. However, if the member's most recent interaction with a book is a reservation, the displayed number of borrowed days will be 'R' regardless of any previous borrowings. For example, if member M01 borrowed book B01 for 7 days and then made a reservation, it will display 'R'. If, after the reservation, M01 borrows B01 for an additional 4 days, the total displayed borrowed days will be 11.
 # If records.txt have a book id that not in books.txt exception raised
+# In members.txt I assumed there are no empty lines
+# Only one user showed as the most active member as it is not required to show all users with similar ratings as the most active user
 
 import sys
+from datetime import datetime
 
 class Book:
     def __init__(self, book_id, name, n_copies, late_charge, n_free_days):
@@ -102,16 +105,88 @@ class Member:
         self.__first_name = first_name
         self.__last_name = last_name
         self.__dob = dob
+        self.__textbook_borrow_or_reserve = []
+        self.__fiction_borrow_or_reserve = []
+    
+    @property
+    def member_id(self):
+        return self.__member_id
+    
+    @property
+    def first_name(self):
+        return self.__first_name
+    
+    @property
+    def last_name(self):
+        return self.__last_name
+    
+    @property
+    def dob(self):
+        return self.__dob
+    
+    def add_textbook_entry(self, entry):
+        self.__textbook_borrow_or_reserve.append(entry)
+    
+    def add_fiction_entry(self, entry):
+        self.__fiction_borrow_or_reserve.append(entry)
+    
+    def calculate_n_textbook_borrow_or_reserve(self):
+        return len(self.__textbook_borrow_or_reserve)
+    
+    def calculate_n_fiction_borrow_or_reserve(self):
+        return len(self.__fiction_borrow_or_reserve)
+    
+    def calculate_average_borrowing_dates(self):
+        textbook_days = [int(entry) for entry in self.__textbook_borrow_or_reserve if entry.isdigit()]
+        fiction_days = [int(entry) for entry in self.__fiction_borrow_or_reserve if entry.isdigit()]
+        if (len(textbook_days) + len(fiction_days) == 0):
+            return 0
+        average = (sum(textbook_days) + sum(fiction_days)) / (len(textbook_days) + len(fiction_days))
+        return average
+    
+    def calculate_statistics(self):
+        n_textbook = self.calculate_n_textbook_borrow_or_reserve()
+        n_fiction = self.calculate_n_fiction_borrow_or_reserve()
+        average = self.calculate_average_borrowing_dates()
+        return {
+            'n_textbook': n_textbook,
+            'n_fiction': n_fiction,
+            'average': average
+        }
 
     def display_info(self):
         return f"Member ID: {self.__member_id}, First name: {self.__first_name}, Last name: {self.__last_name}, DOB: {self.__dob}"
+
+class StandardMember(Member):
+    __n_textbook_borrow_or_reserve = 1
+    __n_fiction_borrow_or_reserve = 2
+    def __init__(self, member_id, first_name, last_name, dob):
+        super().__init__(member_id, first_name, last_name, dob)
+    
+    def check_is_within_textbook_limit(self):
+        return StandardMember.__n_textbook_borrow_or_reserve > super().calculate_n_textbook_borrow_or_reserve()
+    
+    def check_is_within_fiction_limit(self):
+        return StandardMember.__n_fiction_borrow_or_reserve > super().calculate_n_fiction_borrow_or_reserve()
+
+class PremiumMember(Member):
+    __n_textbook_borrow_or_reserve = 2
+    __n_fiction_borrow_or_reserve = 3
+    def __init__(self, member_id, first_name, last_name, dob):
+        super().__init__(member_id, first_name, last_name, dob)
+    
+    def check_is_within_textbook_limit(self):
+        return PremiumMember.__n_textbook_borrow_or_reserve > super().calculate_n_textbook_borrow_or_reserve()
+    
+    def check_is_within_fiction_limit(self):
+        return PremiumMember.__n_fiction_borrow_or_reserve > super().calculate_n_fiction_borrow_or_reserve()
 
 class Records:
     def __init__(self):
         self.__books = {}
         self.__members = {}
     
-    def read_records(self, record_file_name, book_file_name):
+    def read_records(self, record_file_name, book_file_name, member_file_name):
 
         with open(book_file_name, 'r') as file:
             for line in file:
@@ -127,6 +202,23 @@ class Records:
                     self.__books[book_id] = TextBook(book_id, name, n_copies, late_charge, n_free_days)
                 elif book_type == "F":
                     self.__books[book_id] = FictionBook(book_id, name, n_copies, late_charge, n_free_days)
+                else:
+                    raise InvalidBookTypeException("Invalid book type")
+        
+        with open(member_file_name, 'r') as file:
+            for line in file:
+                parts = line.strip().split(',')
+                member_id = parts[0].strip()
+                first_name = parts[1].strip()
+                last_name = parts[2].strip()
+                dob = datetime.strptime(parts[3].strip(), '%d/%m/%Y').date()
+                member_type = parts[4].strip()
+                if (member_type == 'Standard'):
+                    self.__members[member_id] = StandardMember(member_id, first_name, last_name, dob)
+                elif (member_type == 'Premium'):
+                    self.__members[member_id] = PremiumMember(member_id, first_name, last_name, dob)
+                else:
+                    raise InvalidMemberTypeException("Invalid member type")
 
         with open(record_file_name, 'r') as file:
             for line in file:
@@ -136,9 +228,17 @@ class Records:
                     raise InvalidBookIdException(f'No book with book id {book_id}')
                 for part in parts[1:]:
                     member_id, days = part.split(':')
+                    member_id = member_id.strip()
+                    days = days.strip()
                     if member_id not in self.__members:
-                        self.__members[member_id] = Member(member_id.strip())
-                    self.__books[book_id].add_borrow_record(member_id, days.strip())
+                        raise InvalidMemberIdException(f'No member with member id {member_id}')
+                    self.__books[book_id].add_borrow_record(member_id, days)
+                    if (type(self.__books[book_id]).__name__ == 'TextBook'):
+                        self.__members[member_id].add_textbook_entry(days)
+                    elif (type(self.__books[book_id]).__name__ == 'FictionBook'):
+                        self.__members[member_id].add_fiction_entry(days)
+                    else:
+                        raise InvalidBookTypeException("Invalid book type")
 
     def display_records(self):
         member_ids = sorted(self.__members.keys())
@@ -199,7 +299,7 @@ class Records:
                 most_popular_book = book
                 max_borrow_reserve_count = borrow_reserve_count
 
-            if stats['n_borrowing_dates'] and int(stats['n_borrowing_dates'].split('-')[1]) > longest_days:
+            if int(stats['n_borrowing_dates'].split('-')[1]) > longest_days:
                 longest_days_book = book
                 longest_days = int(stats['n_borrowing_dates'].split('-')[1])
         book_information += ('-' * 103)
@@ -218,10 +318,54 @@ class Records:
         f.write(book_information)
         f.close()
 
+    def display_member_info(self):
+        member_information = ''
+        member_information += "MEMBER INFORMATION\n"
+        member_information += ('-' * 105 + '\n')
+        member_information += '| '
+        member_information += f"{'Member ID':<11} {'FName':<15} {'Lname':<15} {'Type':>8} {'DOB':>15} {'NTextbook':>11} {'NFiction':>10} {'Average':>10}|\n"
+        member_information += ('-' * 105 + '\n')
+
+        most_active_member = None
+        max_borrow_reserve_count = 0
+        lease_average_member = None
+        least_average = 1000
+
+        for member_id, member in sorted(self.__members.items()):
+            stats = member.calculate_statistics()
+            member_type = 'Standard'  if type(member).__name__ == 'StandardMember' else 'Premium'
+            member_information += f"| {member.member_id:<11} {member.first_name:<15} {member.last_name:<15} {member_type:>8} {member.dob.strftime('%d-%b-%Y'):>15} {stats['n_textbook']:>11} {stats['n_fiction']:>10} {stats['average']:>10.2f}|\n"
+            
+            borrow_reserve_count = stats['n_textbook'] + stats['n_fiction']
+            if borrow_reserve_count > max_borrow_reserve_count:
+                most_active_member = member
+                max_borrow_reserve_count = borrow_reserve_count
+
+            if stats['average'] < least_average:
+                lease_average_member = member
+                least_average = stats['average']
+        member_information += ('-' * 105)
+        member_information += ('\nMEMBER SUMMARY')
+
+        if most_active_member:
+            member_information += f"\nThe most active member is: {most_active_member.first_name + ' ' + most_active_member.last_name}.\n"
+        if lease_average_member:
+            member_information += f"The member with least verage number of borrowing days is {lease_average_member.first_name + ' ' + lease_average_member.last_name} with ({least_average} days).\n"
+        print(member_information)
+
 class InvalidFreeDaysForFictionException(Exception):
     pass
 
 class InvalidBookIdException(Exception):
+    pass
+
+class InvalidBookTypeException(Exception):
+    pass
+
+class InvalidMemberIdException(Exception):
+    pass
+
+class InvalidMemberTypeException(Exception):
     pass
 
 def main():
@@ -233,10 +377,13 @@ def main():
     # record_file_name = sys.argv[1]
     book_file_name = 'books.txt'
     # book_file_name = sys.argv[2]
+    member_file_name = 'members.txt'
+    # member_file_name = sys.argv[2]
     records = Records()
-    records.read_records(record_file_name, book_file_name)
+    records.read_records(record_file_name, book_file_name, member_file_name)
     records.display_records()
     records.display_book_info()
+    records.display_member_info()
 
 if __name__ == "__main__":
     main()
